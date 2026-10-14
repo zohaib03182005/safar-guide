@@ -68,6 +68,13 @@
   .row.you .bubble { background: var(--user-bubble); border-bottom-right-radius: 5px; }
   .row.bot .bubble { background: var(--bot-bubble); border: 1px solid var(--card-border); border-bottom-left-radius: 5px; }
   .bubble .time { display: block; font-size: .68rem; opacity: .5; margin-top: 5px; }
+  .replay {
+    display: inline-flex; align-items: center; gap: 4px; margin-top: 8px;
+    font-size: .75rem; background: rgba(77,208,166,.12); color: var(--accent);
+    border: 1px solid rgba(77,208,166,.35); border-radius: 14px;
+    padding: 4px 12px; cursor: pointer;
+  }
+  .replay:hover { background: rgba(77,208,166,.22); }
 
   /* typing indicator */
   .typing { display: inline-flex; gap: 5px; padding: 4px 2px; }
@@ -219,7 +226,7 @@ async function getKnowledge() {
   return kbCache;
 }
 
-async function askAI(question, attempt = 1) {
+async function askAI(question, langInstruction, attempt = 1) {
   const kb = await getKnowledge();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);   // 90s safety timeout
@@ -230,7 +237,7 @@ async function askAI(question, attempt = 1) {
       signal: ctrl.signal,
       body: JSON.stringify({
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT + kb },
+          { role: 'system', content: SYSTEM_PROMPT + kb + '\n' + langInstruction },
           { role: 'user', content: question }
         ]
       })
@@ -261,7 +268,16 @@ function addMsg(who, text) {
   row.innerHTML =
     '<div class="avatar">' + avatar + '</div>' +
     '<div class="bubble"><span dir="auto"></span><span class="time">' + nowTime() + '</span></div>';
-  row.querySelector('[dir="auto"]').textContent = text;
+  const bubble = row.querySelector('.bubble');
+  bubble.querySelector('[dir="auto"]').textContent = text;
+  if (who === 'bot') {
+    const btn = document.createElement('button');
+    btn.className = 'replay';
+    btn.textContent = lang === 'ur' ? '🔊 Dobara suno' : '🔊 Listen again';
+    btn.title = 'Replay voice';
+    btn.onclick = () => speak(text);   // fresh tap = guaranteed playback
+    bubble.appendChild(btn);
+  }
   convo.appendChild(row);
   convo.scrollTop = convo.scrollHeight;
   return row;
@@ -341,36 +357,96 @@ micBtn.onclick = () => {
   try { rec.start(); } catch (_) {}
 };
 
-/* ================= Voice output (browser TTS) ================= */
+/* ================= Voice output =================
+   Urdu: real Urdu voice via Google's free TTS (chunked audio, no key needed).
+   English: browser's built-in speech (good voices exist everywhere).
+   Each bot message also gets a 🔊 replay button (fresh tap = guaranteed play).
+*/
+let ttsToken = 0;
+let currentAudio = null;
+
+function stopSpeech() {
+  ttsToken++;
+  try { speechSynthesis.cancel(); } catch (_) {}
+  if (currentAudio) { try { currentAudio.pause(); } catch (_) {} currentAudio = null; }
+}
+
+function chunkText(text, maxLen = 180) {
+  const parts = text.match(/[^۔.!?؟\n]+[۔.!?؟]+|[^۔.!?؟\n]+$/g) || [text];
+  const chunks = [];
+  let cur = '';
+  for (const p of parts) {
+    const s = p.trim();
+    if (!s) continue;
+    if ((cur + ' ' + s).trim().length > maxLen && cur) { chunks.push(cur.trim()); cur = s; }
+    else cur = (cur ? cur + ' ' : '') + s;
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks;
+}
+
+function playGoogleChunk(chunk, my) {
+  return new Promise(resolve => {
+    if (my !== ttsToken) return resolve(true);
+    const url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=ur&client=tw-ob&q=' + encodeURIComponent(chunk);
+    const a = new Audio(url);
+    currentAudio = a;
+    a.onended = () => resolve(true);
+    a.onerror = () => resolve(false);
+    try {
+      const p = a.play();
+      if (p && p.catch) p.catch(() => resolve(false));   // autoplay blocked -> fallback
+    } catch (_) { resolve(false); }
+  });
+}
+
+async function speakUrdu(text) {
+  const my = ++ttsToken;
+  setStatus('🔊 Bol raha hai…');
+  const chunks = chunkText(text);
+  for (const ch of chunks) {
+    const ok = await playGoogleChunk(ch, my);
+    if (my !== ttsToken) return;                          // stopped meanwhile
+    if (!ok) { speakBrowser(text, 'ur-PK', my); return; } // fallback: device voice
+  }
+  if (my === ttsToken) setStatus('');
+}
+
 let voicesReady = false;
 function loadVoices() {
-  const v = speechSynthesis.getVoices();
-  if (v.length) voicesReady = true;
+  try { if (speechSynthesis.getVoices().length) voicesReady = true; } catch (_) {}
 }
 if ('speechSynthesis' in window) {
   loadVoices();
   speechSynthesis.onvoiceschanged = loadVoices;
 }
-function pickVoice() {
-  if (!('speechSynthesis' in window)) return null;
-  const target = lang === 'ur' ? 'ur-PK' : 'en-US';
-  const vs = speechSynthesis.getVoices();
-  return vs.find(v => v.lang.toLowerCase() === target.toLowerCase())
-      || vs.find(v => v.lang.toLowerCase().startsWith(target.slice(0, 2)))
-      || null;
+function pickVoice(target) {
+  try {
+    const vs = speechSynthesis.getVoices();
+    return vs.find(v => v.lang.toLowerCase() === target.toLowerCase())
+        || vs.find(v => v.lang.toLowerCase().startsWith(target.slice(0, 2)))
+        || null;
+  } catch (_) { return null; }
 }
-function stopSpeech() { try { speechSynthesis.cancel(); } catch (_) {} }
-function speak(text) {
-  if (!('speechSynthesis' in window)) return;
-  stopSpeech();
+function speakBrowser(text, targetLang, my) {
+  if (!('speechSynthesis' in window)) { setStatus(''); return; }
+  if (my !== undefined && my !== ttsToken) return;
+  stopSpeechSilent();
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = lang === 'ur' ? 'ur-PK' : 'en-US';
-  const v = pickVoice();
+  u.lang = targetLang;
+  const v = pickVoice(targetLang);
   if (v) u.voice = v;
   u.rate = 0.95;
-  u.onend = u.onerror = () => setStatus('');
-  setStatus(lang === 'ur' ? '🔊 Bol raha hai… (dobara mic dabane se ruk jayega)' : '🔊 Speaking… (tap mic to stop)');
+  u.onend = u.onerror = () => { if (my === undefined || my === ttsToken) setStatus(''); };
+  setStatus(targetLang.startsWith('ur') ? '🔊 Bol raha hai…' : '🔊 Speaking…');
   speechSynthesis.speak(u);
+}
+function stopSpeechSilent() { try { speechSynthesis.cancel(); } catch (_) {} }
+
+function speak(text) {
+  stopSpeech();   // stop anything currently playing first
+  if (lang === 'ur') speakUrdu(text);
+  else speakBrowser(text, 'en-US');
 }
 
 /* ================= Ask flow ================= */
@@ -384,8 +460,12 @@ async function ask(question) {
   setBusy(true);
   showTyping();
   setStatus(lang === 'ur' ? 'Safar Guide soch raha hai…' : 'Safar Guide is thinking…');
+  // Force the reply language: Urdu script in the question => MUST reply in Urdu.
+  const langInstruction = /[\u0600-\u06FF]/.test(question)
+    ? 'IMPORTANT: The user wrote in URDU. You MUST reply fully in Urdu (اردو script).'
+    : (lang === 'ur' ? 'Reply in Urdu (اردو).' : 'Reply in English.');
   try {
-    const reply = await askAI(question);
+    const reply = await askAI(question, langInstruction);
     hideTyping();
     addMsg('bot', reply);
     setStatus('');

@@ -253,7 +253,7 @@ async function askAI(question, langInstruction, attempt = 1) {
   } catch (err) {
     if (attempt === 1 && err.name !== 'AbortError') {
       await new Promise(r => setTimeout(r, 1200));       // one automatic retry
-      return askAI(question, 2);
+      return askAI(question, langInstruction, 2);
     }
     throw err;
   } finally {
@@ -430,14 +430,14 @@ const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/
    Ultra-natural. Works in Edge; attempted everywhere, fails gracefully. */
 function speakEdgeNeural(text, my) {
   return new Promise(resolve => {
-    let settled = false, audioStarted = false, ws = null;
+    let settled = false, audioStarted = false, ws = null, timer = null;
     const done = ok => {
-      if (!settled) { settled = true; clearTimeout(timer); try { ws && ws.close(); } catch (_) {} resolve(ok); }
+      if (!settled) { settled = true; if (timer) clearTimeout(timer); try { ws && ws.close(); } catch (_) {} resolve(ok); }
     };
-    const timer = setTimeout(() => done(false), 15000);
     try {
       ws = new WebSocket(EDGE_TTS_URL);
     } catch (_) { done(false); return; }
+    timer = setTimeout(() => done(false), 15000);
     ws.binaryType = 'arraybuffer';
     const chunks = [];
     const esc = text

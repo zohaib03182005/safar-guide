@@ -339,7 +339,18 @@ if (SR) {
   rec.interimResults = false;
   rec.maxAlternatives = 1;
   rec.onresult = e => { stopListening(); ask(e.results[0][0].transcript); };
-  rec.onerror = e => { stopListening(); setStatus(lang === 'ur' ? 'Mic error: ' + e.error + ' — type karein.' : 'Mic error: ' + e.error + ' — please type instead.'); };
+  rec.onerror = e => {
+    stopListening();
+    let help = lang === 'ur' ? ' — type karein.' : ' — please type instead.';
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      help = lang === 'ur'
+        ? ' — browser settings mein mic ki ijazat (Allow) dein, phir dobara dabayein. Ya type karein.'
+        : ' — allow the microphone in browser settings, then tap again. Or type instead.';
+    } else if (e.error === 'no-speech') {
+      help = lang === 'ur' ? ' — kuch sunai nahi diya, dobara bolein.' : ' — nothing heard, please speak again.';
+    }
+    setStatus('Mic: ' + e.error + help);
+  };
   rec.onend = () => { if (recognizing) stopListening(); };
 } else {
   micBtn.disabled = true;
@@ -485,7 +496,6 @@ function speakEdgeNeural(text, my) {
 
 async function speakUrdu(text) {
   const my = ++ttsToken;
-  setStatus('🔊 Bol raha hai…');
   // Tier 0: neural voice — only where it can work (Edge); skipped elsewhere to avoid silent waits
   if (IS_EDGE) {
     try { if (await speakEdgeNeural(text, my)) return; } catch (_) {}
@@ -493,20 +503,21 @@ async function speakUrdu(text) {
   }
   // Tier 1: Google TTS chunks (intelligible on every browser)
   const chunks = chunkText(text);
-  let anyOk = false, blocked = false;
+  let anyOk = false;
   for (const ch of chunks) {
     const r = await playGoogleChunk(ch, my);
     if (my !== ttsToken) return;
-    if (r.ok) { anyOk = true; await new Promise(rr => setTimeout(rr, 250)); }
-    else { blocked = !!r.blocked; break; }
+    if (r.ok) { anyOk = true; setStatus('🔊 Bol raha hai…'); await new Promise(rr => setTimeout(rr, 250)); }
+    else break;
   }
   if (my !== ttsToken) return;
   if (anyOk) { setStatus(''); return; }
-  if (blocked) { flagTapToListen(); return; }   // browser paused it — one tap plays it
   // Tier 2: real device Urdu voice only — never English-voice gibberish
   const v = pickVoice('ur-PK');
   if (v && /^ur/i.test(v.lang)) { speakBrowserWith(text, v, my); return; }
-  setStatus('🔇 Awaz nahi chal saki — internet check karein, jawab upar parh lein');
+  // Nothing auto-played (browser paused it or network hiccup) — one tap retries everything
+  // with a fresh gesture, which browsers always allow.
+  flagTapToListen();
 }
 
 function speakBrowserWith(text, voice, my) {

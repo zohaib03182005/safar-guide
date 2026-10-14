@@ -75,6 +75,10 @@
     padding: 4px 12px; cursor: pointer;
   }
   .replay:hover { background: rgba(77,208,166,.22); }
+  .replay.needs-tap {
+    animation: pulse 1.2s infinite; background: var(--accent); color: #0b1e2d;
+    font-weight: 700; font-size: .85rem; padding: 8px 18px;
+  }
 
   /* typing indicator */
   .typing { display: inline-flex; gap: 5px; padding: 4px 2px; }
@@ -385,20 +389,40 @@ function chunkText(text, maxLen = 180) {
   return chunks;
 }
 
+const IS_EDGE = /Edg\//.test(navigator.userAgent || '');
+
 function playGoogleChunk(chunk, my) {
+  // resolves {ok, blocked} — tries two Google hosts, detects autoplay blocks
   return new Promise(resolve => {
-    if (my !== ttsToken) return resolve(true);
-    const url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=ur&client=tw-ob&q=' + encodeURIComponent(chunk);
-    const a = new Audio(url);
-    currentAudio = a;
-    a.onended = () => resolve(true);
-    a.onerror = () => resolve(false);
-    try {
-      const p = a.play();
-      if (p && p.catch) p.catch(() => resolve(false));   // autoplay blocked -> fallback
-    } catch (_) { resolve(false); }
+    if (my !== ttsToken) return resolve({ ok: true });
+    const hosts = ['https://translate.google.com', 'https://translate.googleapis.com'];
+    let hi = 0;
+    const tryHost = () => {
+      if (my !== ttsToken) return resolve({ ok: true });
+      const url = hosts[hi] + '/translate_tts?ie=UTF-8&tl=ur&client=tw-ob&q=' + encodeURIComponent(chunk);
+      const a = new Audio(url);
+      currentAudio = a;
+      a.onended = () => resolve({ ok: true });
+      a.onerror = () => { hi++; if (hi < hosts.length) tryHost(); else resolve({ ok: false }); };
+      try {
+        const p = a.play();
+        if (p && p.catch) p.catch(err => resolve({ ok: false, blocked: !!err && err.name === 'NotAllowedError' }));
+      } catch (_) { resolve({ ok: false }); }
+    };
+    tryHost();
   });
 }
+
+function flagTapToListen() {
+  document.querySelectorAll('.row.bot .replay').forEach(b => {
+    if (!b.dataset.done) b.classList.add('needs-tap');
+  });
+  setStatus('🔊 Sunne ke liye jawab ke neeche TAP karein');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.replay');
+  if (b) { b.classList.remove('needs-tap'); b.dataset.done = '1'; }
+});
 
 const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4-DFB0-4A1C-B242-38D64E035F96';
 
@@ -462,24 +486,27 @@ function speakEdgeNeural(text, my) {
 async function speakUrdu(text) {
   const my = ++ttsToken;
   setStatus('🔊 Bol raha hai…');
-  // Tier 0: neural voice — clear, natural, human-like
-  try { if (await speakEdgeNeural(text, my)) return; } catch (_) {}
-  if (my !== ttsToken) return;
+  // Tier 0: neural voice — only where it can work (Edge); skipped elsewhere to avoid silent waits
+  if (IS_EDGE) {
+    try { if (await speakEdgeNeural(text, my)) return; } catch (_) {}
+    if (my !== ttsToken) return;
+  }
   // Tier 1: Google TTS chunks (intelligible on every browser)
   const chunks = chunkText(text);
-  let anyOk = false;
+  let anyOk = false, blocked = false;
   for (const ch of chunks) {
-    const ok = await playGoogleChunk(ch, my);
+    const r = await playGoogleChunk(ch, my);
     if (my !== ttsToken) return;
-    if (ok) { anyOk = true; await new Promise(r => setTimeout(r, 250)); }
-    else break;
+    if (r.ok) { anyOk = true; await new Promise(rr => setTimeout(rr, 250)); }
+    else { blocked = !!r.blocked; break; }
   }
   if (my !== ttsToken) return;
   if (anyOk) { setStatus(''); return; }
+  if (blocked) { flagTapToListen(); return; }   // browser paused it — one tap plays it
   // Tier 2: real device Urdu voice only — never English-voice gibberish
   const v = pickVoice('ur-PK');
   if (v && /^ur/i.test(v.lang)) { speakBrowserWith(text, v, my); return; }
-  setStatus('🔇 Awaz nahi chal saki — jawab upar parh lein');
+  setStatus('🔇 Awaz nahi chal saki — internet check karein, jawab upar parh lein');
 }
 
 function speakBrowserWith(text, voice, my) {

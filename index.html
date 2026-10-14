@@ -259,9 +259,9 @@ async function askAI(question, langInstruction, attempt = 1) {
     if (!reply) throw new Error('ai-empty');
     return reply;
   } catch (err) {
-    if (attempt === 1 && err.name !== 'AbortError') {
-      await new Promise(r => setTimeout(r, 1200));       // one automatic retry
-      return askAI(question, langInstruction, 2);
+    if (attempt < 3 && err.name !== 'AbortError') {
+      await new Promise(r => setTimeout(r, attempt === 1 ? 1200 : 3000));  // backoff retries
+      return askAI(question, langInstruction, attempt + 1);
     }
     throw err;
   } finally {
@@ -370,8 +370,10 @@ function renderChips() {
 }
 
 /* ================= Language ================= */
+const LS_LANG = 'safar-guide-lang';
 function setLang(l, btn) {
   lang = l;
+  try { localStorage.setItem(LS_LANG, l); } catch (_) {}
   document.querySelectorAll('.lang-toggle button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   textInput.placeholder = l === 'ur' ? 'Apna sawal likhein…' : 'Type your question…';
@@ -677,9 +679,9 @@ textInput.addEventListener('keydown', e => { if (e.key === 'Enter') ask(textInpu
 document.getElementById('clearBtn').onclick = () => {
   stopSpeech(); stopListening();
   convo.innerHTML = '';
-  clearSavedChat();
   setStatus('');
   greet();
+  clearSavedChat();   // wipe the just-saved greeting too — reload starts clean
 };
 
 /* ================= Welcome ================= */
@@ -690,7 +692,11 @@ function greet() {
   addMsg('bot', msg);
 }
 
-renderChips();
+(function initLang() {
+  let sl = null;
+  try { sl = localStorage.getItem(LS_LANG); } catch (_) {}
+  setLang(sl === 'en' ? 'en' : 'ur', document.getElementById(sl === 'en' ? 'langEn' : 'langUr'));
+})();
 if (!loadChat()) greet();
 textInput.focus();
 </script>

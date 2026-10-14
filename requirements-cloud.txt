@@ -1,0 +1,13 @@
+# Safar Guide — CLOUD (slim) requirements for the public demo deploy.
+# No torch / faster-whisper / av: the web demo uses
+#   - chat : pollinations.ai free API (no key, via urllib)
+#   - mic  : browser Web Speech API (built into Chrome/Edge)
+#   - voice: Edge TTS server-side, browser speechSynthesis as fallback
+# /api/stt (voice-note transcription) stays available in the full local setup
+# and returns a clean 501 on the cloud demo.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+python-dotenv>=1.0
+python-multipart>=0.0.9
+edge-tts>=6.1

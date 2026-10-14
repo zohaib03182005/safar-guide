@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+auth/
+node_modules/
+whatsapp-bot/
+media_server.py
+test_call.py
+/tmp/

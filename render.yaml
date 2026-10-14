@@ -1,0 +1,15 @@
+# One-click deploy config for Render.com (free tier).
+# Steps: push this folder to a PUBLIC git repo (GitHub/Codeberg/...) ->
+# render.com -> New -> Web Service -> "Public Git repository" -> paste repo URL.
+# Add GEMINI_API_KEY later for better answers (optional).
+services:
+  - type: web
+    name: safar-guide
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: SAFAR_LLM_PROVIDER
+        value: pollinations
+      - key: GEMINI_API_KEY
+        sync: false

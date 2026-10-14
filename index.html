@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Safar Guide — AI Voice Travel Agent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+    color: #fff; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 24px;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 4px; }
+  .sub { opacity: .75; margin-bottom: 20px; font-size: .95rem; }
+  .lang-toggle { display: flex; gap: 8px; margin-bottom: 18px; }
+  .lang-toggle button {
+    padding: 8px 22px; border-radius: 20px; border: 1px solid #4dd0a6;
+    background: transparent; color: #fff; cursor: pointer; font-size: .95rem;
+  }
+  .lang-toggle button.active { background: #4dd0a6; color: #0f2027; font-weight: 600; }
+  #micBtn {
+    width: 130px; height: 130px; border-radius: 50%; border: none; cursor: pointer;
+    font-size: 3rem; background: #4dd0a6; color: #0f2027;
+    box-shadow: 0 0 0 0 rgba(77,208,166,.5); transition: transform .15s;
+  }
+  #micBtn:hover { transform: scale(1.05); }
+  #micBtn.listening { animation: pulse 1.2s infinite; background: #ff6b6b; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(255,107,107,.55); }
+    70% { box-shadow: 0 0 0 26px rgba(255,107,107,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,107,107,0); }
+  }
+  #status { margin: 16px 0 8px; min-height: 1.5em; opacity: .85; }
+  #conversation {
+    width: min(680px, 100%); background: rgba(255,255,255,.07);
+    border-radius: 14px; padding: 18px; margin-top: 10px;
+    max-height: 38vh; overflow-y: auto;
+  }
+  .msg { margin-bottom: 12px; line-height: 1.55; }
+  .msg.you { color: #9fd8ff; }
+  .msg.bot { color: #d9ffe9; }
+  .msg .who { font-size: .75rem; opacity: .6; display: block; margin-bottom: 2px; }
+  #textRow { display: flex; gap: 8px; width: min(680px, 100%); margin-top: 14px; }
+  #textInput {
+    flex: 1; padding: 12px 14px; border-radius: 10px; border: none; font-size: 1rem;
+    background: rgba(255,255,255,.12); color: #fff; outline: none;
+  }
+  #textInput::placeholder { color: rgba(255,255,255,.5); }
+  #sendBtn {
+    padding: 0 22px; border-radius: 10px; border: none; cursor: pointer;
+    background: #4dd0a6; color: #0f2027; font-weight: 600; font-size: 1rem;
+  }
+  .hint { margin-top: 14px; font-size: .8rem; opacity: .55; text-align: center; max-width: 640px; }
+</style>
+</head>
+<body>
+  <h1>🏔️ Safar Guide</h1>
+  <div class="sub">AI voice travel guide for Pakistan's Northern Areas — FYP Module 1</div>
+
+  <div class="lang-toggle">
+    <button id="langUr" class="active">اردو</button>
+    <button id="langEn">English</button>
+  </div>
+
+  <button id="micBtn" title="Tap and speak">🎤</button>
+  <div id="status">Tap the mic and ask, e.g. "Hunza ka best time kab hai?"</div>
+
+  <div id="conversation"></div>
+
+  <div id="textRow">
+    <input id="textInput" placeholder="Or type your question here…" autocomplete="off">
+    <button id="sendBtn">Ask</button>
+  </div>
+  <div class="hint">
+    100% free &amp; static: speech recognition and voice run in your browser (Chrome/Edge),
+    answers come from a free AI API. No servers, no sign-up. Best in Chrome on desktop.
+  </div>
+
+<script>
+let lang = 'ur';                 // 'ur' | 'en'
+let recognizing = false;
+const micBtn = document.getElementById('micBtn');
+const statusEl = document.getElementById('status');
+const convo = document.getElementById('conversation');
+const textInput = document.getElementById('textInput');
+
+// --- Static brain: system prompt + knowledge base, answered via free AI API ---
+const SYSTEM_PROMPT = `You are "Safar Guide", a friendly AI voice travel guide for Pakistan's
+Northern Areas (Gilgit-Baltistan, Hunza, Skardu, Naran-Kaghan, Swat), part of a
+final-year university project.
+
+Rules:
+- Answer in the SAME language the traveler uses (Urdu or English).
+- Keep spoken answers SHORT: 2-4 sentences, then offer to say more.
+- Use the knowledge base below. Present prices as estimates.
+- Never invent hotel names, prices, or road statuses. If unsure, say your data
+  may be outdated and the traveler should confirm locally.
+- For bookings, mention they can use the platform's travel-agent marketplace.
+
+KNOWLEDGE BASE:
+`;
+
+let kbCache = null;
+async function getKnowledge() {
+  if (kbCache !== null) return kbCache;
+  const r = await fetch('knowledge_base.md');
+  if (!r.ok) throw new Error('Could not load knowledge base');
+  kbCache = await r.text();
+  return kbCache;
+}
+
+async function askAI(question) {
+  const kb = await getKnowledge();
+  const res = await fetch('https://text.pollinations.ai/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT + kb },
+        { role: 'user', content: question }
+      ]
+    })
+  });
+  if (!res.ok) throw new Error('AI service error ' + res.status);
+  const reply = (await res.text()).trim();
+  if (!reply) throw new Error('Empty reply from AI service');
+  return reply;
+}
+// --- end static brain ---
+
+document.getElementById('langUr').onclick = e => setLang('ur', e.target);
+document.getElementById('langEn').onclick = e => setLang('en', e.target);
+function setLang(l, btn) {
+  lang = l;
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  statusEl.textContent = l === 'ur'
+    ? 'Mic dabayen aur poochein, misal: "Hunza ka best time kab hai?"'
+    : 'Tap the mic and ask, e.g. "When is the best time for Hunza?"';
+}
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+if (SR) {
+  rec = new SR();
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = e => {
+    const text = e.results[0][0].transcript;
+    stopListening();
+    ask(text);
+  };
+  rec.onerror = e => { stopListening(); setStatus('Mic error: ' + e.error + ' — try typing instead.'); };
+  rec.onend = () => { if (recognizing) stopListening(); };
+} else {
+  setStatus('Voice input not supported in this browser — please type your question.');
+  micBtn.style.opacity = .4;
+}
+
+function setStatus(t) { statusEl.textContent = t; }
+function stopListening() { recognizing = false; micBtn.classList.remove('listening'); try { rec && rec.stop(); } catch(_){} }
+
+micBtn.onclick = () => {
+  if (!rec) return;
+  if (recognizing) { stopListening(); setStatus('Stopped.'); return; }
+  recognizing = true;
+  micBtn.classList.add('listening');
+  rec.lang = lang === 'ur' ? 'ur-PK' : 'en-US';
+  setStatus(lang === 'ur' ? 'Sun raha hoon… bolein' : 'Listening… speak now');
+  try { rec.start(); } catch(_) {}
+};
+
+document.getElementById('sendBtn').onclick = () => {
+  const t = textInput.value.trim();
+  if (t) { textInput.value = ''; ask(t); }
+};
+textInput.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('sendBtn').click(); });
+
+function addMsg(who, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.innerHTML = '<span class="who">' + (who === 'you' ? 'You' : 'Safar Guide') + '</span>';
+  div.appendChild(document.createTextNode(text));
+  convo.appendChild(div);
+  convo.scrollTop = convo.scrollHeight;
+}
+
+async function ask(question) {
+  addMsg('you', question);
+  setStatus('Thinking… / سوچ رہا ہے…');
+  try {
+    const reply = await askAI(question);
+    addMsg('bot', reply);
+    browserSpeak(reply);
+  } catch (err) {
+    setStatus('Error: ' + err.message);
+  }
+}
+
+function browserSpeak(text) {
+  setStatus('Speaking… / بول رہا ہے…');
+  if (!('speechSynthesis' in window)) {
+    setStatus('Audio unavailable — but the answer is shown above.');
+    return;
+  }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang === 'ur' ? 'ur-PK' : 'en-US';
+  u.onend = () => setStatus('Tap the mic to ask more');
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+</script>
+</body>
+</html>

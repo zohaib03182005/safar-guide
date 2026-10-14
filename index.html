@@ -400,16 +400,97 @@ function playGoogleChunk(chunk, my) {
   });
 }
 
+const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4-DFB0-4A1C-B242-38D64E035F96';
+
+/* Tier 0: Microsoft neural Urdu voice (ur-PK-AsadNeural) via WebSocket.
+   Ultra-natural. Works in Edge; attempted everywhere, fails gracefully. */
+function speakEdgeNeural(text, my) {
+  return new Promise(resolve => {
+    let settled = false, audioStarted = false, ws = null;
+    const done = ok => {
+      if (!settled) { settled = true; clearTimeout(timer); try { ws && ws.close(); } catch (_) {} resolve(ok); }
+    };
+    const timer = setTimeout(() => done(false), 15000);
+    try {
+      ws = new WebSocket(EDGE_TTS_URL);
+    } catch (_) { done(false); return; }
+    ws.binaryType = 'arraybuffer';
+    const chunks = [];
+    const esc = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/[\u0300-\u036F]/g, ' ')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ');
+    ws.onopen = () => {
+      const ts = new Date().toString();
+      ws.send('X-Timestamp:' + ts + '\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n' +
+        JSON.stringify({ context: { synthesis: { audio: { metadataoptions: { sentenceBoundaryEnabled: 'false', wordBoundaryEnabled: 'false' }, outputFormat: 'audio-24khz-48kbitrate-mono-mp3' } } } }));
+      const reqId = (crypto.randomUUID ? crypto.randomUUID() : 'req' + Date.now()).replace(/-/g, '');
+      const ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" +
+        "<voice name='ur-PK-AsadNeural'><prosody rate='+0%' pitch='+0Hz'>" + esc + '</prosody></voice></speak>';
+      ws.send('X-RequestId:' + reqId + '\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:' + ts + '\r\nPath:ssml\r\n\r\n' + ssml);
+    };
+    ws.onmessage = ev => {
+      if (settled || my !== ttsToken) { done(false); return; }
+      if (typeof ev.data === 'string') {
+        if (ev.data.indexOf('Path:turn.end') !== -1) {
+          if (!chunks.length) { done(false); return; }
+          audioStarted = true;
+          const a = new Audio(URL.createObjectURL(new Blob(chunks, { type: 'audio/mpeg' })));
+          currentAudio = a;
+          setStatus('🔊 Bol raha hai…');
+          a.onended = () => { if (my === ttsToken) setStatus(''); done(true); };
+          a.onerror = () => done(false);
+          try { const p = a.play(); if (p && p.catch) p.catch(() => done(false)); }
+          catch (_) { done(false); }
+        }
+      } else {
+        const buf = new Uint8Array(ev.data);
+        let idx = -1;
+        for (let i = 0; i + 3 < buf.length; i++) {
+          if (buf[i] === 13 && buf[i + 1] === 10 && buf[i + 2] === 13 && buf[i + 3] === 10) { idx = i; break; }
+        }
+        if (idx !== -1 && new TextDecoder().decode(buf.slice(0, idx)).indexOf('Path:audio') !== -1) {
+          chunks.push(buf.slice(idx + 4).buffer);
+        }
+      }
+    };
+    ws.onerror = () => { if (!audioStarted) done(false); };
+    ws.onclose = () => { if (!audioStarted) done(false); };
+  });
+}
+
 async function speakUrdu(text) {
   const my = ++ttsToken;
   setStatus('🔊 Bol raha hai…');
+  // Tier 0: neural voice — clear, natural, human-like
+  try { if (await speakEdgeNeural(text, my)) return; } catch (_) {}
+  if (my !== ttsToken) return;
+  // Tier 1: Google TTS chunks (intelligible on every browser)
   const chunks = chunkText(text);
+  let anyOk = false;
   for (const ch of chunks) {
     const ok = await playGoogleChunk(ch, my);
-    if (my !== ttsToken) return;                          // stopped meanwhile
-    if (!ok) { speakBrowser(text, 'ur-PK', my); return; } // fallback: device voice
+    if (my !== ttsToken) return;
+    if (ok) { anyOk = true; await new Promise(r => setTimeout(r, 250)); }
+    else break;
   }
-  if (my === ttsToken) setStatus('');
+  if (my !== ttsToken) return;
+  if (anyOk) { setStatus(''); return; }
+  // Tier 2: real device Urdu voice only — never English-voice gibberish
+  const v = pickVoice('ur-PK');
+  if (v && /^ur/i.test(v.lang)) { speakBrowserWith(text, v, my); return; }
+  setStatus('🔇 Awaz nahi chal saki — jawab upar parh lein');
+}
+
+function speakBrowserWith(text, voice, my) {
+  try { speechSynthesis.cancel(); } catch (_) {}
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = voice.lang;
+  u.voice = voice;
+  u.rate = 0.95;
+  u.onend = u.onerror = () => { if (my === ttsToken) setStatus(''); };
+  setStatus('🔊 Bol raha hai…');
+  speechSynthesis.speak(u);
 }
 
 let voicesReady = false;
